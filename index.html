@@ -395,7 +395,7 @@ function panel() {
   } else if (sel && sel.t === 'export') {
     h += `<h2>書き出す</h2><p class="hint">ファイル名：<b>${esc(expName())}</b></p>`;
     h += `<div class="btns"><button class="pri" data-act="exp_share">共有ボタンで保存</button></div>`;
-    h += `<p class="hint">→「ファイルに保存」→ Google ドライブ →「実測」→ 現場 → 部屋 のフォルダ。</p>`;
+    h += `<p class="hint">→「ファイルに保存」→ Google ドライブ →「実測」→ 現場 → 部屋 のフォルダ。<br><b>同じ名前のファイルがあると聞かれたら「置き換える」</b>を押すと、上書きになります。</p>`;
     h += `<div class="btns"><button data-act="exp_dl">ダウンロードで保存</button></div>`;
     h += `<p class="hint">→ iPad の「ファイル」アプリの「ダウンロード」に入ります。そこから Google ドライブへ移してください。</p>`;
     h += `<p class="hint">保存したファイルの中に、部屋のデータが入っているかは、パソコンで確かめます。</p>`;
@@ -652,11 +652,14 @@ function onTap(m) {
 
 // ---------- 開く・残す・書き出す ----------
 const KEY = () => `jissoku:${S.site}/${S.room}`;
+// 書き出すファイルの名前。開いた（実測）のファイルの名前をそのまま使う → 同じ所に保存すると「置き換える」で上書きになる（2026-11-17 信明さん A 案）
+let jName = null;
+const cleanName = n => n ? n.replace(/\.json\.txt$/i, '.json') : null;
 function save() {
-  try { localStorage.setItem(KEY(), JSON.stringify({S, J, ts: Date.now()})); $('#st').textContent = '自動で残しました ' + new Date().toTimeString().slice(0, 5); } catch (e) { $('#st').textContent = '自動で残せませんでした（書き出してください）'; }
+  try { localStorage.setItem(KEY(), JSON.stringify({S, J, name: jName, ts: Date.now()})); $('#st').textContent = '自動で残しました ' + new Date().toTimeString().slice(0, 5); } catch (e) { $('#st').textContent = '自動で残せませんでした（書き出してください）'; }
 }
-function startRoom(scan, jis) {
-  S = scan;
+function startRoom(scan, jis, name = null) {
+  S = scan; jName = cleanName(name);
   J = jis || {kind: '部屋データ_実測', version: 1, site: S.site, room: S.room};
   hist = []; sel = null; draft = null;
   loop = outerLoop(S.walls); loopIds = new Set(loop.map(w => w.id));
@@ -667,18 +670,18 @@ function startRoom(scan, jis) {
   buildRuns(); fitView(); refresh(); save();
 }
 async function openFiles(files) {
-  const objs = [];
-  for (const f of files) { try { objs.push(JSON.parse(await f.text())); } catch (e) { toast(f.name + ' が読めませんでした'); } }
+  const objs = [], names = new Map();
+  for (const f of files) { try { const o = JSON.parse(await f.text()); objs.push(o); names.set(o, f.name); } catch (e) { toast(f.name + ' が読めませんでした'); } }
   const sc = objs.find(o => o.kind === '部屋データ_スキャン'), js = objs.find(o => o.kind === '部屋データ_実測');
   if (sc) {
-    let j = js || null;
-    if (!j) { try { const sv = JSON.parse(localStorage.getItem(`jissoku:${sc.site}/${sc.room}`) || 'null'); if (sv && confirm('この部屋の、前に入れた続きがあります。続きから入れますか？')) j = sv.J; } catch (e) {} }
+    let j = js || null, nm = js ? names.get(js) : null;
+    if (!j) { try { const sv = JSON.parse(localStorage.getItem(`jissoku:${sc.site}/${sc.room}`) || 'null'); if (sv && confirm('この部屋の、前に入れた続きがあります。続きから入れますか？')) { j = sv.J; nm = sv.name; } } catch (e) {} }
     if (j && (j.room !== sc.room)) { if (!confirm(`実測の部屋名（${j.room}）とスキャンの部屋名（${sc.room}）が違います。このまま開きますか？`)) return; }
-    startRoom(sc, j);
+    startRoom(sc, j, nm);
   } else if (js) {
     if (!S) { toast('先に、スキャンの JSON を開いてください（一緒に選んでも大丈夫です）'); return; }
     if (js.room !== S.room && !confirm(`実測の部屋名（${js.room}）が、今の部屋（${S.room}）と違います。開きますか？`)) return;
-    change(() => { J = js; draft = null; sel = null; });
+    change(() => { J = js; jName = cleanName(names.get(js)); draft = null; sel = null; });
   } else toast('部屋データの JSON ではありませんでした');
 }
 function ymd() { const d = new Date(); return String(d.getFullYear()).slice(2) + String(d.getMonth() + 1).padStart(2, '0') + String(d.getDate()).padStart(2, '0'); }
@@ -692,8 +695,8 @@ function exportText() {
 }
 // 書き出し：右の欄に2つのやり方を出す。
 // 2026-11-17 iPad の Chrome で、共有に題名を付けたら、ファイルではなく題名の文字だけが保存された → 題名は付けない。ダウンロードも選べるようにする。
-const expName = () => `${ymd()}_${S.room}_実測.json`;
-const expFile = () => new File([exportText()], expName(), {type: 'application/json'});
+const expName = () => jName || `${ymd()}_${S.room}_実測.json`;
+const expFile = () => { if (!jName) { jName = expName(); save(); } return new File([exportText()], jName, {type: 'application/json'}); };
 async function shareExport() {
   const file = expFile();
   if (!(navigator.canShare && navigator.canShare({files: [file]}))) { toast('この画面では共有が使えません。「ダウンロードで保存」を使ってください'); return; }
@@ -720,7 +723,7 @@ function savedList() {
 }
 $('#saved').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;
-  try { const v = JSON.parse(localStorage.getItem(b.dataset.k)); startRoom(v.S, v.J); } catch (e) { toast('読めませんでした'); }
+  try { const v = JSON.parse(localStorage.getItem(b.dataset.k)); startRoom(v.S, v.J, v.name); } catch (e) { toast('読めませんでした'); }
 });
 $('#b_open').onclick = $('#b_open2').onclick = () => $('#file').click();
 $('#file').onchange = e => { openFiles([...e.target.files]); e.target.value = ''; };
