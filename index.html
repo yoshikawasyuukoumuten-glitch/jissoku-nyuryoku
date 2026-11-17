@@ -167,6 +167,7 @@ function buildRuns() {
 const runOf = id => runs.find(r => r.ids.includes(id));
 const runByKey = k => runs.find(r => r.key === k);
 const pt = (r, s, d) => [r.a[0] + r.u[0] * s - r.n[0] * d, r.a[1] + r.u[1] * s - r.n[1] * d];
+const runLabelAt = r => sub(pt(r, r.len / 2, 0), mul(r.n, r.t + FS * 1.3));   // 面の長さの数字の位置
 
 // スキャンの窓・ドア（実測があれば上書きした値）
 function scanOps() {
@@ -274,12 +275,12 @@ function drawPlan() {
     g += o ? L_(w.a, w.b, '#455a64', 2, 'stroke-dasharray="8 5"') : L_(w.a, w.b, '#37474f', 3);
   }
   for (const e of (J.extra_lines || [])) g += L_(e.a, e.b, '#37474f', 2.5);
-  // 面の長さ（スキャン、青）：壁の外側に
+  // 面の長さ：壁の外側に。スキャンのままは青（ ）、実測は黒
   for (const r of runs) {
     if (r.inside || r.len < 400) continue;
-    const c = sub(pt(r, r.len / 2, 0), mul(r.n, r.t + FS * 1.3));
+    const c = runLabelAt(r), ml = (J.wall_lengths || {})[r.key];
     const rot = Math.abs(r.u[1]) > 0.5 ? `transform="rotate(-90 ${c[0]} ${c[1] + FS * 0.35})"` : '';
-    g += T(c[0], c[1] + FS * 0.35, [vS(r.len)], FS * 0.85, 'middle', rot);
+    g += T(c[0], c[1] + FS * 0.35, [ml ? vK(ml) : vS(r.len)], FS * 0.85, 'middle', rot);
   }
   // 選んだ面：オレンジの帯と ①②
   const sr = sel && sel.t === 'run' ? runByKey(sel.key) : (draft ? runByKey(draft.runKey) : null);
@@ -391,6 +392,14 @@ function panel() {
     h += `<p class="warn" id="warn"></p><div class="btns"><button class="pri" data-act="ok">決める</button><button data-act="cancel">やめる</button>`;
     if (draft.mode === 'edit') h += `<button class="dan" data-act="del">消す</button>`;
     h += '</div>';
+  } else if (sel && sel.t === 'export') {
+    h += `<h2>書き出す</h2><p class="hint">ファイル名：<b>${esc(expName())}</b></p>`;
+    h += `<div class="btns"><button class="pri" data-act="exp_share">共有ボタンで保存</button></div>`;
+    h += `<p class="hint">→「ファイルに保存」→ Google ドライブ →「実測」→ 現場 → 部屋 のフォルダ。</p>`;
+    h += `<div class="btns"><button data-act="exp_dl">ダウンロードで保存</button></div>`;
+    h += `<p class="hint">→ iPad の「ファイル」アプリの「ダウンロード」に入ります。そこから Google ドライブへ移してください。</p>`;
+    h += `<p class="hint">保存したファイルの中に、部屋のデータが入っているかは、パソコンで確かめます。</p>`;
+    h += `<div class="btns"><button data-act="close">閉じる</button></div>`;
   } else if (sel && sel.t === 'op') {
     const o = scanOps().find(x => x.id === sel.id), m = o.meas, win = o.kind === 'window';
     h += `<h2>${esc(o.label || o.id)}（スキャンの${win ? '窓' : 'ドア'}）</h2>`;
@@ -409,7 +418,8 @@ function panel() {
     h += `<div class="btns"><button data-act="close">閉じる</button></div>`;
   } else if (sel && sel.t === 'run') {
     const r = runByKey(sel.key);
-    h += `<h2>選んだ面</h2><p class="hint">長さ（スキャン）<b style="color:var(--scan)">(${fmt(r.len)})</b><br>①・② は図の上の丸の印です。</p>`;
+    h += `<h2>選んだ面</h2><p class="hint">①・② は図の上の丸の印です。</p>`;
+    h += fld('この面の長さ（① の角から ② の角まで、実測）', 'len_run', (J.wall_lengths || {})[r.key], `スキャン (${fmt(r.len)})`);
     if (!r.inside) {
       h += `<div class="btns"><button class="pri" data-act="adddoor">入口を足す</button><button data-act="addwin">窓を足す</button><button data-act="close">閉じる</button></div>`;
     } else if (r.ids.length === 1) {
@@ -495,6 +505,8 @@ side.addEventListener('click', e => {
     return;
   }
   if (act === 'close') { sel = null; refresh(); return; }
+  if (act === 'exp_share') { shareExport(); return; }
+  if (act === 'exp_dl') { downloadExport(); return; }
   if (act === 'wo_ok') {
     const id = runByKey(sel.key).ids[0];
     const g = f => side.querySelector(`[data-f="${f}"]`).value;
@@ -523,6 +535,17 @@ side.addEventListener('change', e => {           // スキャンの窓・ドア�
   if (f === 'ch') {
     const v = num(raw); if (v != null && isNaN(v)) { toast('数字だけを入れてください'); return; }
     change(() => { if (v == null) delete J.ceiling; else J.ceiling = Object.assign({}, J.ceiling || {}, {h: v}); }, true);
+    return;
+  }
+  if (f === 'len_run' && sel && sel.t === 'run') {
+    const v = num(raw); if (v != null && isNaN(v)) { toast('数字だけを入れてください'); return; }
+    const key = sel.key, r = runByKey(key);
+    if (v != null && Math.abs(v - r.len) > 300) toast(`スキャン（${fmt(r.len)}）と ${fmt(Math.abs(v - r.len))} ちがいます。角を確かめてください`);
+    change(() => {
+      J.wall_lengths = J.wall_lengths || {};
+      if (v == null) delete J.wall_lengths[key]; else J.wall_lengths[key] = v;
+      if (!Object.keys(J.wall_lengths).length) delete J.wall_lengths;
+    }, true);
     return;
   }
   if (f.startsWith('op_') && sel && sel.t === 'op') {
@@ -606,7 +629,14 @@ svg.addEventListener('wheel', e => {             // パソコンで試すとき�
 function onTap(m) {
   if (draft) return;                              // 入力中は、図のタップで選び直さない
   const tol = 28 * mmPerPx();
-  const near = (r, s0, s1) => { const v = sub(m, r.a), s = dot(v, r.u), d = -dot(v, r.n); return s > s0 - tol && s < s1 + tol && d > -tol && d < r.t + tol; };
+  // 面の長さの数字（壁の外）をタップ → その面を選ぶ（2026-11-17 全長をタップすると窓が選ばれていた）
+  for (const r of runs) {
+    if (r.inside || r.len < 400) continue;
+    const c = runLabelAt(r), along = Math.abs(dot(sub(m, c), r.u)), across = Math.abs(dot(sub(m, c), r.n));
+    if (along < Math.max(FS * 3, tol) && across < Math.max(FS * 1.1, tol * 0.8)) { sel = {t: 'run', key: r.key}; refresh(); return; }
+  }
+  // 窓・ドアは、壁の帯の中（と内側に少し）だけ。壁の外側は選ばない
+  const near = (r, s0, s1) => { const v = sub(m, r.a), s = dot(v, r.u), d = -dot(v, r.n); return s > s0 - tol && s < s1 + tol && d > -tol && d < r.t + tol * 0.3; };
   for (const o of scanOps()) if (near(o.r, o.s0, o.s1)) { sel = {t: 'op', id: o.id}; refresh(); return; }
   const adds = J.add_openings || [];
   for (let i = 0; i < adds.length; i++) { const gm = addedGeom(adds[i]); if (gm && near(gm.r, gm.s0, gm.s1)) { openAdded(i); return; } }
@@ -660,17 +690,23 @@ function exportText() {
   out.updated = `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}`;
   return JSON.stringify(out, null, 1);
 }
-async function doExport() {
+// 書き出し：右の欄に2つのやり方を出す。
+// 2026-11-17 iPad の Chrome で、共有に題名を付けたら、ファイルではなく題名の文字だけが保存された → 題名は付けない。ダウンロードも選べるようにする。
+const expName = () => `${ymd()}_${S.room}_実測.json`;
+const expFile = () => new File([exportText()], expName(), {type: 'application/json'});
+async function shareExport() {
+  const file = expFile();
+  if (!(navigator.canShare && navigator.canShare({files: [file]}))) { toast('この画面では共有が使えません。「ダウンロードで保存」を使ってください'); return; }
+  try { await navigator.share({files: [file]}); } catch (e) {}
+}
+function downloadExport() {
+  const a = document.createElement('a'); a.href = URL.createObjectURL(expFile()); a.download = expName();
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+}
+function doExport() {
   if (draft) { toast('入力中のものを「決める」か「やめる」にしてから書き出してください'); return; }
-  const name = `${ymd()}_${S.room}_実測.json`;
-  const blob = new Blob([exportText()], {type: 'application/json'});
-  const file = new File([blob], name, {type: 'application/json'});
-  if (navigator.canShare && navigator.canShare({files: [file]})) {
-    try { await navigator.share({files: [file], title: name}); } catch (e) {}
-    return;
-  }
-  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; a.click();
-  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  sel = {t: 'export'}; refresh();
 }
 function savedList() {
   const box = $('#saved'); let h = '';
