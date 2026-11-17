@@ -1,0 +1,701 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>実測入力</title>
+<!--
+  実測アプリの入力画面（iPad のブラウザ用）。2026-11-17 作成 v1。
+  ・パソコンで作った「部屋データ（スキャン）」の JSON を開いて、現場で実測を入れる。
+  ・入れたものは「部屋データ（実測）」の JSON に書き出す（heimen.py がそのまま読む形）。
+  ・データは iPad の中（ブラウザ）にだけ置く。外には送らない。
+  v1 でできること：入口・窓を足す、
+  スキャンの窓・ドアの実測、壁を開口に変える、天井高、測り忘れの確認、元に戻す、書き出す。
+-->
+<style>
+:root{--scan:#1565c0;--miss:#d32f2f;--ok:#111;--sel:#ef6c00;--bg:#eceff1}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:#222;
+  font-family:-apple-system,"Hiragino Sans","Hiragino Kaku Gothic ProN","Meiryo",sans-serif;
+  -webkit-user-select:none;user-select:none;overscroll-behavior:none;-webkit-text-size-adjust:100%}
+#top{display:flex;gap:8px;align-items:center;padding:8px 12px;background:#37474f;color:#fff;height:64px}
+#top .ttl{font-size:18px;font-weight:bold;margin-right:auto;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#top .st{font-size:13px;opacity:.8;margin-right:8px;white-space:nowrap}
+button{font:inherit;font-size:17px;padding:8px 14px;border-radius:10px;border:1px solid #90a4ae;background:#fff;color:#222;min-height:48px;cursor:pointer}
+button.pri{background:#1565c0;color:#fff;border-color:#1565c0;font-weight:bold}
+button.dan{color:#c62828;border-color:#e57373}
+button:disabled{opacity:.35}
+#main{display:flex;height:calc(100% - 64px)}
+#plan{flex:1;position:relative;touch-action:none;background:#fff;min-width:0}
+#svg{width:100%;height:100%;display:block}
+#side{width:390px;background:#fff;border-left:1px solid #b0bec5;overflow-y:auto;padding:14px 16px 40px}
+#side h2{font-size:20px;margin:4px 0 10px}
+#side h3{font-size:16px;margin:18px 0 6px;color:#455a64}
+.hint{font-size:15px;line-height:1.6;color:#455a64;margin:6px 0 10px}
+.fld{margin:12px 0}
+.fld label{display:block;font-size:15px;color:#37474f;margin-bottom:4px}
+.fld .row{display:flex;align-items:center;gap:8px}
+.fld input{font:inherit;font-size:22px;padding:8px 10px;width:170px;border:2px solid #90a4ae;border-radius:8px;-webkit-user-select:text;user-select:text}
+.fld input.txt{width:100%}
+.fld .unit{font-size:16px;color:#607d8b}
+.fld .was{font-size:14px;color:var(--scan)}
+.seg{display:flex;flex-wrap:wrap;gap:6px}
+.seg button{flex:1 1 auto;font-size:16px;padding:6px 10px}
+.seg button.on{background:#fff3e0;border:2px solid var(--sel);font-weight:bold}
+.btns{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}
+.warn{color:var(--miss);font-size:15px;min-height:1em;margin:8px 0 0}
+.chk{list-style:none;padding:0;margin:0}
+.chk li{padding:10px 8px;border-bottom:1px solid #eceff1;font-size:15px;line-height:1.5;cursor:pointer}
+.chk li.m{color:var(--miss)}
+.chk li.g{color:#2e7d32;cursor:default}
+.key{font-size:13px;color:#607d8b;line-height:1.7;margin-top:18px}
+.key b.s{color:var(--scan)} .key b.k{color:#111} .key b.r{color:var(--miss)}
+#start{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:20px;text-align:center;background:#fff}
+#start p{font-size:16px;color:#455a64;line-height:1.7;margin:0}
+#saved button{display:block;width:340px;margin:6px auto;text-align:left}
+#toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#263238;color:#fff;padding:10px 18px;border-radius:10px;font-size:15px;opacity:0;transition:opacity .3s;pointer-events:none}
+@media (max-width:820px){#main{flex-direction:column}#side{width:100%;height:46%;border-left:0;border-top:1px solid #b0bec5}#top .st{display:none}}
+</style>
+</head>
+<body>
+<div id="top">
+  <div class="ttl" id="ttl">実測入力</div>
+  <div class="st" id="st"></div>
+  <button id="b_open">ファイルを開く</button>
+  <button id="b_undo" disabled>元に戻す</button>
+  <button id="b_fit">全体</button>
+  <button id="b_exp" class="pri" disabled>書き出す</button>
+  <input type="file" id="file" accept=".json,application/json" multiple hidden>
+</div>
+<div id="main">
+  <div id="plan">
+    <svg id="svg" xmlns="http://www.w3.org/2000/svg"></svg>
+    <div id="start">
+      <p>パソコンで作った「部屋データ（スキャン）」の JSON を開いてください。<br>
+         前に書き出した「（実測）」の JSON も、一緒に開けば続きから入れられます。</p>
+      <button class="pri" id="b_open2">ファイルを開く</button>
+      <div id="saved"></div>
+    </div>
+  </div>
+  <div id="side"></div>
+</div>
+<div id="toast"></div>
+<script>
+'use strict';
+const $ = s => document.querySelector(s);
+const svg = $('#svg'), side = $('#side');
+let S = null;          // 部屋データ（スキャン）。変えない
+let J = null;          // 部屋データ（実測）。知らない項目もそのまま残す
+let hist = [];         // 元に戻す用
+let sel = null;        // {t:'run', key} / {t:'op', id} / null
+let draft = null;      // 入力中の入口・窓
+let runs = [], loop = [], loopIds = new Set();
+let vb = null, FS = 120;
+
+// ---------- 計算の道具 ----------
+const sub = (p, q) => [p[0] - q[0], p[1] - q[1]], add = (p, q) => [p[0] + q[0], p[1] + q[1]], mul = (p, k) => [p[0] * k, p[1] * k];
+const dot = (p, q) => p[0] * q[0] + p[1] * q[1], cross = (p, q) => p[0] * q[1] - p[1] * q[0];
+const dist = (p, q) => Math.hypot(p[0] - q[0], p[1] - q[1]);
+const unitv = (a, b) => { const d = sub(b, a), L = Math.hypot(d[0], d[1]) || 1; return [d[0] / L, d[1] / L]; };
+const uw = w => unitv(w.a, w.b);
+const fmt = v => Math.round(v).toLocaleString('en-US');
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
+function num(s) {                       // 「2,820」「２８２０」も読む。空は null、読めないのは NaN
+  if (s == null) return null;
+  s = String(s).replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0)).replace(/[,，\s]/g, '');
+  if (s === '') return null;
+  const v = Number(s);
+  return isFinite(v) ? Math.round(v) : NaN;
+}
+function isect(p, d, q, e) {
+  const den = cross(d, e);
+  if (Math.abs(den) < 1e-9) return null;
+  const t = cross(sub(q, p), e) / den;
+  return add(p, mul(d, t));
+}
+function toast(t) { const el = $('#toast'); el.textContent = t; el.style.opacity = 1; clearTimeout(toast.h); toast.h = setTimeout(() => el.style.opacity = 0, 2200); }
+
+// ---------- 部屋の形：まわりの輪と「面」 ----------
+function outerLoop(walls) {             // heimen.py の outer_loop と同じ考え方
+  const tol = 30;
+  let st = null, sk = null;
+  for (const w of walls) {
+    const k = [Math.min(w.a[0], w.b[0]), Math.min(w.a[1], w.b[1])];
+    if (!sk || k[0] < sk[0] || (k[0] === sk[0] && k[1] < sk[1])) { st = w; sk = k; }
+  }
+  const lp = [st];
+  for (let i = 0; i < walls.length; i++) {
+    const cur = lp[lp.length - 1];
+    const nx = walls.filter(w => w !== cur && dist(w.a, cur.b) < tol);
+    if (!nx.length) return [];
+    if (nx.length > 1) { const u = uw(cur); nx.sort((p, q) => cross(u, uw(q)) - cross(u, uw(p))); }
+    if (nx[0] === st) break;
+    lp.push(nx[0]);
+  }
+  return lp;
+}
+// 面：まっすぐつながる壁のひと続き（角や、部屋の中の壁が付く所で切る）。人が「角から」測る単位
+function buildRuns() {
+  const ws = S.walls;
+  const ends = [];
+  for (const w of ws) { ends.push({w, p: w.a}); ends.push({w, p: w.b}); }
+  for (const e of (J.extra_lines || [])) { ends.push({w: e, p: e.a}); ends.push({w: e, p: e.b}); }
+  const next = w => {
+    const u = uw(w);
+    const c = ws.filter(x => x !== w && dist(x.a, w.b) < 30 && Math.abs(cross(u, uw(x))) < 0.03 && dot(u, uw(x)) > 0);
+    if (c.length !== 1) return null;
+    if (ends.some(e => e.w !== w && e.w !== c[0] && dist(e.p, w.b) < 30)) return null;
+    return c[0];
+  };
+  const prev = w => ws.find(x => next(x) === w) || null;
+  const used = new Set();
+  runs = [];
+  for (const w of ws) {
+    if (used.has(w.id)) continue;
+    let s = w, guard = 0;
+    while (guard++ < 50) { const p = prev(s); if (!p || p === w || used.has(p.id)) break; s = p; }
+    const list = [];
+    let c = s; guard = 0;
+    while (c && !used.has(c.id) && guard++ < 50) { list.push(c); used.add(c.id); c = next(c); }
+    const a = list[0].a, b = list[list.length - 1].b, u = unitv(a, b);
+    runs.push({key: list.map(x => x.id).join('+'), ids: list.map(x => x.id), walls: list, a, b, u,
+      n: list[0].normal, len: dot(sub(b, a), u), t: list[0].thick || 160,
+      offs: list.map(x => dot(sub(x.a, a), u)), inside: !loopIds.has(list[0].id)});
+  }
+}
+const runOf = id => runs.find(r => r.ids.includes(id));
+const runByKey = k => runs.find(r => r.key === k);
+const pt = (r, s, d) => [r.a[0] + r.u[0] * s - r.n[0] * d, r.a[1] + r.u[1] * s - r.n[1] * d];
+
+// スキャンの窓・ドア（実測があれば上書きした値）
+function scanOps() {
+  return S.openings.map(o => {
+    const j = (J.openings || {})[o.id] || null;
+    const r = runOf(o.wall);
+    const k = r.ids.indexOf(o.wall);
+    const e = Object.assign({}, o, {label: (j && j.label) || (J.labels || {})[o.id] || ''});
+    if (j) for (const f of ['w', 'h', 'sill', 'type', 'hinge', 'swing']) if (j[f] != null) e[f] = j[f];
+    e.meas = j || {};
+    e.r = r; e.s0 = r.offs[k] + e.pos - e.w / 2; e.s1 = e.s0 + e.w;
+    return e;
+  });
+}
+// 足した入口・窓の位置（面の始まり ① から）
+function addedGeom(j) {
+  if (j.walls) {
+    const r = runByKey(j.walls.join('+'));
+    if (!r) return null;
+    const s0 = j.edge_from_a != null ? j.edge_from_a : r.len - j.edge_from_b - j.w;
+    return {r, s0, s1: s0 + j.w};
+  }
+  const r = runOf(j.wall); if (!r) return null;           // 前の形（壁1枚の id）
+  const k = r.ids.indexOf(j.wall), w = r.walls[k], Lw = dist(w.a, w.b), o = r.offs[k];
+  const s0 = j.edge_from_a != null ? o + j.edge_from_a : o + Lw - j.edge_from_b - j.w;
+  return {r, s0, s1: s0 + j.w};
+}
+// 入力中のものを、書き出す形にする（数字が足りなければ null）
+function draftToJ(d) {
+  const dd = num(d.dist), w = num(d.w), h = num(d.h), sill = num(d.sill);
+  if (dd == null || w == null || isNaN(dd) || isNaN(w) || w <= 0 || dd < 0) return null;
+  const r = runByKey(d.runKey);
+  const o = {id: d.id, walls: r.ids.slice(), kind: d.kind === '窓' ? 'window' : 'door', w};
+  if (d.from === 'a') o.edge_from_a = dd; else o.edge_from_b = dd;
+  if (h != null && !isNaN(h)) o.h = h;
+  if (d.kind === '窓') { o.basis = '内乗り'; if (sill != null && !isNaN(sill)) o.sill = sill; }
+  else { o.type = d.kind; if (d.kind === '開き戸') { if (d.hinge) o.hinge = d.hinge; if (d.swing) o.swing = d.swing; } }
+  o.label = (d.label || '').trim() || d.id;
+  return o;
+}
+
+// ---------- 図を描く ----------
+function fitView() {
+  if (!S) return;
+  const xs = [], ys = [];
+  for (const w of S.walls) { xs.push(w.a[0], w.b[0]); ys.push(w.a[1], w.b[1]); }
+  const m = 900;
+  let x0 = Math.min(...xs) - m, y0 = Math.min(...ys) - m, x1 = Math.max(...xs) + m, y1 = Math.max(...ys) + m;
+  const cw = svg.clientWidth || 800, ch = svg.clientHeight || 600;
+  let w = x1 - x0, h = y1 - y0;
+  if (w / h < cw / ch) { const nw = h * cw / ch; x0 -= (nw - w) / 2; w = nw; } else { const nh = w * ch / cw; y0 -= (nh - h) / 2; h = nh; }
+  vb = {x: x0, y: y0, w, h};
+  // 字の大きさは、部屋の大きさで決める（画面の形では変えない）
+  FS = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)) / 48;
+  setVB();
+}
+function setVB() { svg.setAttribute('viewBox', `${vb.x} ${vb.y} ${vb.w} ${vb.h}`); }
+
+function T(x, y, parts, size, anchor = 'middle', extra = '') {   // parts: [[文字, 色], ...]
+  const sp = parts.map(([t, c]) => `<tspan fill="${c}">${esc(t)}</tspan>`).join('');
+  return `<text x="${x}" y="${y}" font-size="${size}" text-anchor="${anchor}" ${extra}>${sp}</text>`;
+}
+const L_ = (p, q, c, w, ex = '') => `<line x1="${p[0]}" y1="${p[1]}" x2="${q[0]}" y2="${q[1]}" stroke="${c}" stroke-width="${w}" vector-effect="non-scaling-stroke" ${ex}/>`;
+const poly = (ps, fill, ex = '') => `<polygon points="${ps.map(p => p.join(',')).join(' ')}" fill="${fill}" ${ex}/>`;
+
+function opSymbol(r, s0, s1, kind, type, hinge, swing, col) {
+  const t = r.t;
+  let g = poly([pt(r, s0, -2), pt(r, s1, -2), pt(r, s1, t + 2), pt(r, s0, t + 2)], '#fff');
+  g += L_(pt(r, s0, 0), pt(r, s0, t), col, 1.5) + L_(pt(r, s1, 0), pt(r, s1, t), col, 1.5);
+  if (kind === 'window') {
+    for (const k of [0.4, 0.6]) g += L_(pt(r, s0, t * k), pt(r, s1, t * k), col, 1.2);
+  } else if (type === '開き戸' && (hinge === 'a' || hinge === 'b') && (swing === 'in' || swing === 'out')) {
+    const sh = hinge === 'a' ? s0 : s1, dep = swing === 'in' ? 0 : t;
+    const ld = swing === 'in' ? r.n : mul(r.n, -1), td = hinge === 'a' ? r.u : mul(r.u, -1);
+    const hp = pt(r, sh, dep), R = s1 - s0, lp = add(hp, mul(ld, R));
+    g += L_(hp, lp, col, 2.2);
+    const q = [];
+    for (let k = 0; k <= 12; k++) { const th = Math.PI / 2 * k / 12; q.push(add(hp, add(mul(ld, R * Math.cos(th)), mul(td, R * Math.sin(th))))); }
+    g += `<polyline points="${q.map(p => p.join(',')).join(' ')}" fill="none" stroke="${col}" stroke-width="1.2" stroke-dasharray="5 4" vector-effect="non-scaling-stroke"/>`;
+  } else if (type === '引き戸') {
+    g += L_(pt(r, s0, t * 0.5), pt(r, s1, t * 0.5), col, 2.6);
+  }
+  return g;
+}
+// 数字の色：スキャンのまま 青（ ）、実測 黒、足りない 赤
+const vS = v => [`(${fmt(v)})`, 'var(--scan)'], vK = v => [fmt(v), '#111'], vR = t => [t, 'var(--miss)'];
+
+function drawPlan() {
+  if (!S) { svg.innerHTML = ''; return; }
+  let g = '';
+  // 壁（まわりの輪）：内側の面と、厚さの帯
+  const n = loop.length;
+  for (let i = 0; i < n; i++) {
+    const w = loop[i], pv = loop[(i - 1 + n) % n], nx = loop[(i + 1) % n];
+    const t = w.thick || 160, u = uw(w);
+    const off = ww => [sub(ww.a, mul(ww.normal, ww.thick || 160)), uw(ww)];
+    const [oa] = off(w), [pa, pu] = off(pv), [na, nu] = off(nx);
+    const A = isect(oa, u, pa, pu) || oa, B = isect(oa, u, na, nu) || sub(w.b, mul(w.normal, t));
+    g += poly([w.a, w.b, B, A], '#cfd8dc', 'stroke="#455a64" stroke-width="1" vector-effect="non-scaling-stroke"');
+  }
+  // 部屋の中の壁・開口に変えた壁・手で描き足した線
+  for (const w of S.walls) {
+    if (loopIds.has(w.id)) continue;
+    const o = (J.wall_to_opening || {})[w.id];
+    g += o ? L_(w.a, w.b, '#455a64', 2, 'stroke-dasharray="8 5"') : L_(w.a, w.b, '#37474f', 3);
+  }
+  for (const e of (J.extra_lines || [])) g += L_(e.a, e.b, '#37474f', 2.5);
+  // 面の長さ（スキャン、青）：壁の外側に
+  for (const r of runs) {
+    if (r.inside || r.len < 400) continue;
+    const c = sub(pt(r, r.len / 2, 0), mul(r.n, r.t + FS * 1.3));
+    const rot = Math.abs(r.u[1]) > 0.5 ? `transform="rotate(-90 ${c[0]} ${c[1] + FS * 0.35})"` : '';
+    g += T(c[0], c[1] + FS * 0.35, [vS(r.len)], FS * 0.85, 'middle', rot);
+  }
+  // 選んだ面：オレンジの帯と ①②
+  const sr = sel && sel.t === 'run' ? runByKey(sel.key) : (draft ? runByKey(draft.runKey) : null);
+  if (sr) {
+    g += L_(sr.a, sr.b, 'var(--sel)', 9, 'stroke-opacity=".55" stroke-linecap="round"');
+    const k = Math.min(FS * 1.6, sr.len / 4);
+    for (const [p, lab] of [[add(add(sr.a, mul(sr.u, k)), mul(sr.n, FS * 1.6)), '①'], [add(sub(sr.b, mul(sr.u, k)), mul(sr.n, FS * 1.6)), '②']]) {
+      g += `<circle cx="${p[0]}" cy="${p[1]}" r="${FS * 0.95}" fill="var(--sel)"/>` + T(p[0], p[1] + FS * 0.42, [[lab.replace('①', '1').replace('②', '2'), '#fff']], FS * 1.2, 'middle', 'font-weight="bold"');
+    }
+  }
+  // 窓・ドア
+  const labels = [];
+  for (const o of scanOps()) {
+    const on = sel && sel.t === 'op' && sel.id === o.id;
+    g += opSymbol(o.r, o.s0, o.s1, o.kind, o.type, o.hinge, o.swing, on ? 'var(--sel)' : '#111');
+    const m = o.meas, done = m.w != null && m.h != null && (o.kind !== 'window' || m.sill != null);
+    const l1 = [[(o.label || o.id) + ' ', on ? 'var(--sel)' : '#111'], done ? ['', '#111'] : vR('未測定')];
+    const l2 = [['W', '#111'], m.w != null ? vK(o.w) : vS(o.w), ['×H', '#111'], m.h != null ? vK(o.h) : vS(o.h)];
+    const l3 = o.kind === 'window' ? [['FL+', '#111'], m.sill != null ? vK(o.sill) : vS(o.sill)] : [[o.type || '', '#111']];
+    labels.push({o, lines: [l1, l2, l3], dd: o.kind === 'window' ? FS * 3.2 : FS * 3.6});
+  }
+  const adds = (J.add_openings || []).map((j, i) => ({j, i, gm: addedGeom(j)}));
+  for (const {j, i, gm} of adds) {
+    if (!gm || (draft && draft.mode === 'edit' && draft.idx === i)) continue;
+    const on = sel && sel.t === 'add' && sel.i === i;
+    g += opSymbol(gm.r, gm.s0, gm.s1, j.kind, j.type, j.hinge, j.swing, on ? 'var(--sel)' : '#111');
+    const miss = !j.h || (j.kind === 'window' ? j.sill == null : !j.type);
+    const l1 = [[(j.label || j.id) + ' ', '#111'], miss ? vR('足りない') : ['', '#111']];
+    const l2 = [['W', '#111'], vK(j.w), ['×H', '#111'], j.h ? vK(j.h) : vR('要確認')];
+    const l3 = j.kind === 'window' ? [['FL+', '#111'], j.sill != null ? vK(j.sill) : vR('要確認')] : [j.type ? [j.type === '開口' ? '開口（扉なし）' : j.type, '#111'] : vR('種類 要確認')];
+    labels.push({o: {r: gm.r, s0: gm.s0, s1: gm.s1}, lines: [l1, l2, l3], dd: (j.type === '開き戸' && j.swing === 'in') ? j.w + FS * 2 : FS * 3.6});
+  }
+  // 入力中の入口（オレンジ）
+  if (draft) {
+    const o = draftToJ(draft);
+    if (o) {
+      const gm = addedGeom(o);
+      if (gm) g += opSymbol(gm.r, gm.s0, gm.s1, o.kind, o.type, o.hinge, o.swing, 'var(--sel)');
+    }
+  }
+  for (const lb of labels) {
+    const n_ = lb.o.r.n, side_ = Math.abs(n_[0]) > 0.5;          // 縦の壁は、字を壁から離す側へそろえる
+    const c = add(pt(lb.o.r, (lb.o.s0 + lb.o.s1) / 2, 0), mul(n_, side_ ? FS * 1.2 : lb.dd));
+    const anc = side_ ? (n_[0] > 0 ? 'start' : 'end') : 'middle';
+    lb.lines.forEach((ln, k) => { g += T(c[0], c[1] + (k - 1) * FS * 1.2, ln, FS * 0.9, anc); });
+  }
+  // 開口に変えた壁の記入
+  for (const w of S.walls) {
+    const o = (J.wall_to_opening || {})[w.id];
+    if (!o) continue;
+    const c = add(mul(add(w.a, w.b), 0.5), mul(w.normal, FS * 1.4));
+    const rot = Math.abs(uw(w)[1]) > 0.5 ? `transform="rotate(-90 ${c[0]} ${c[1]})"` : '';
+    g += T(c[0], c[1], [['開口 W', '#111'], vK(o.w), ['・枠の下 FL+', '#111'], o.head ? vK(o.head) : vR('要確認')], FS * 0.85, 'middle', rot);
+  }
+  // 部屋名・天井高
+  for (const ar of (J.areas || [])) {
+    g += T(ar.at[0], ar.at[1], [[ar.name, '#78909c']], FS * 1.1);
+  }
+  const chv = J.ceiling && J.ceiling.h ? vK(J.ceiling.h) : vS(S.ceiling.h);
+  const ca = (J.areas && J.areas[0]) ? [J.areas[0].at[0], J.areas[0].at[1] + FS * 1.5] : [vb.x + vb.w / 2, vb.y + vb.h / 2];
+  g += T(ca[0], ca[1], [['CH ', '#78909c'], chv], FS * 0.9);
+  svg.innerHTML = g;
+}
+
+// ---------- 右の欄 ----------
+function seg(field, opts, cur) {
+  return `<div class="seg">${opts.map(([v, t]) => `<button data-act="set" data-f="${field}" data-v="${v}" class="${cur === v ? 'on' : ''}">${t}</button>`).join('')}</div>`;
+}
+function fld(label, f, val, was = '', unit = 'mm', cls = '') {
+  return `<div class="fld"><label>${label}</label><div class="row"><input data-f="${f}" class="${cls}" ${cls ? 'type="text"' : 'inputmode="numeric" pattern="[0-9]*"'} value="${esc(val ?? '')}" autocomplete="off">${unit ? `<span class="unit">${unit}</span>` : ''}${was ? `<span class="was">${was}</span>` : ''}</div></div>`;
+}
+function checks() {
+  const out = [];
+  if (!(J.ceiling && J.ceiling.h)) out.push({t: '天井高：測っていない', go: null});
+  for (const o of scanOps()) {
+    const m = o.meas, need = [];
+    if (m.w == null) need.push('巾'); if (m.h == null) need.push('高さ'); if (o.kind === 'window' && m.sill == null) need.push('床から窓の下');
+    if (o.kind !== 'window' && !o.type) need.push('扉の種類');
+    if (need.length) out.push({t: `${o.label || o.id}：${need.join('・')} を測っていない`, go: {t: 'op', id: o.id}});
+  }
+  (J.add_openings || []).forEach((j, i) => {
+    const need = [];
+    if (!j.h) need.push('高さ');
+    if (j.kind === 'window') { if (j.sill == null) need.push('床から窓の下'); }
+    else { if (!j.type) need.push('種類'); else if (j.type === '開き戸' && (!j.hinge || !j.swing)) need.push('吊元・開く向き'); }
+    if (need.length) out.push({t: `${j.label || j.id}：${need.join('・')} が空`, go: {t: 'add', i}});
+  });
+  for (const [id, o] of Object.entries(J.wall_to_opening || {})) if (!o.head) out.push({t: `開口（${id}）：枠の下の高さが空`, go: null});
+  return out;
+}
+function panel() {
+  if (!S) { side.innerHTML = '<h2>実測の入力</h2><p class="hint">まず、部屋データのファイルを開いてください。</p>'; return; }
+  let h = '';
+  if (draft) {
+    const r = runByKey(draft.runKey), win = draft.kind === '窓';
+    h += `<h2>${draft.mode === 'add' ? (win ? '窓を足す' : '入口を足す') : (win ? '足した窓を直す' : '足した入口を直す')}</h2>`;
+    h += `<p class="hint">面の長さ（スキャン）<b style="color:var(--scan)">(${fmt(r.len)})</b>。①・② は図の上の丸の印。</p>`;
+    h += `<div class="fld"><label>種類</label>${seg('kind', [['開き戸', '開き戸'], ['引き戸', '引き戸'], ['開口', '開口（扉なし）'], ['窓', '窓']], draft.kind)}</div>`;
+    h += `<div class="fld"><label>どちらの角から測りましたか</label>${seg('from', [['a', '① の角から'], ['b', '② の角から']], draft.from)}</div>`;
+    h += fld(`角から${win ? '窓' : '入口'}の近い端まで`, 'dist', draft.dist);
+    h += fld('巾（内乗り：枠の内側）', 'w', draft.w);
+    h += fld(win ? '高さ（内乗り）' : '高さ（床から枠の下まで）', 'h', draft.h);
+    if (win) h += fld('床から窓の下まで', 'sill', draft.sill);
+    if (draft.kind === '開き戸') {
+      h += `<div class="fld"><label>吊元（ちょうつがいの側）</label>${seg('hinge', [['a', '① の側'], ['b', '② の側']], draft.hinge)}</div>`;
+      h += `<div class="fld"><label>開く向き</label>${seg('swing', [['in', 'この部屋の内へ'], ['out', '部屋の外へ']], draft.swing)}</div>`;
+    }
+    h += fld('符号・名前（空なら ' + draft.id + '）', 'label', draft.label, '', '', 'txt');
+    h += `<p class="warn" id="warn"></p><div class="btns"><button class="pri" data-act="ok">決める</button><button data-act="cancel">やめる</button>`;
+    if (draft.mode === 'edit') h += `<button class="dan" data-act="del">消す</button>`;
+    h += '</div>';
+  } else if (sel && sel.t === 'op') {
+    const o = scanOps().find(x => x.id === sel.id), m = o.meas, win = o.kind === 'window';
+    h += `<h2>${esc(o.label || o.id)}（スキャンの${win ? '窓' : 'ドア'}）</h2>`;
+    h += `<p class="hint">測った数字を入れてください。空のところは、スキャンのまま（青の（ ））になります。</p>`;
+    h += fld('巾（内乗り）', 'op_w', m.w, `スキャン (${fmt(S.openings.find(x => x.id === o.id).w)})`);
+    h += fld(win ? '高さ（内乗り）' : '高さ（床から枠の下まで）', 'op_h', m.h, `スキャン (${fmt(S.openings.find(x => x.id === o.id).h)})`);
+    if (win) h += fld('床から窓の下まで', 'op_sill', m.sill, `スキャン (${fmt(S.openings.find(x => x.id === o.id).sill)})`);
+    else {
+      h += `<div class="fld"><label>種類</label>${seg('op_type', [['開き戸', '開き戸'], ['引き戸', '引き戸'], ['開口', '開口（扉なし）']], m.type || '')}</div>`;
+      if (m.type === '開き戸') {
+        h += `<div class="fld"><label>吊元（ちょうつがいの側）</label>${seg('op_hinge', [['a', '① の側'], ['b', '② の側']], m.hinge || '')}</div>`;
+        h += `<div class="fld"><label>開く向き</label>${seg('op_swing', [['in', 'この部屋の内へ'], ['out', '部屋の外へ']], m.swing || '')}</div>`;
+      }
+    }
+    h += fld('符号・名前', 'op_label', o.label, '', '', 'txt');
+    h += `<div class="btns"><button data-act="close">閉じる</button></div>`;
+  } else if (sel && sel.t === 'run') {
+    const r = runByKey(sel.key);
+    h += `<h2>選んだ面</h2><p class="hint">長さ（スキャン）<b style="color:var(--scan)">(${fmt(r.len)})</b><br>①・② は図の上の丸の印です。</p>`;
+    if (!r.inside) {
+      h += `<div class="btns"><button class="pri" data-act="adddoor">入口を足す</button><button data-act="addwin">窓を足す</button><button data-act="close">閉じる</button></div>`;
+    } else if (r.ids.length === 1) {
+      const o = (J.wall_to_opening || {})[r.ids[0]] || {};
+      h += `<p class="hint">部屋の中の壁です。スキャンが壁にしてしまった開口（扉のある所など）なら、開口に変えられます。</p>`;
+      h += fld('開口の巾（扉を開けた時）', 'wo_w', o.w);
+      h += fld('枠の下（床から）', 'wo_head', o.head);
+      h += fld('メモ', 'wo_note', o.note, '', '', 'txt');
+      h += `<div class="btns"><button class="pri" data-act="wo_ok">開口にする</button>${o.w ? '<button class="dan" data-act="wo_del">壁に戻す</button>' : ''}<button data-act="close">閉じる</button></div>`;
+    } else {
+      h += `<p class="hint">この面には、まだ入口を足せません。</p><div class="btns"><button data-act="close">閉じる</button></div>`;
+    }
+  } else {
+    h += `<h2>実測の入力</h2><p class="hint">壁（面）をタップ → 入口・窓を足す。<br>窓・ドアをタップ → 測った寸法を入れる。<br>2本指で広げる・縮める、1本指でずらす。</p>`;
+    h += fld('天井高（床から天井まで）', 'ch', J.ceiling && J.ceiling.h, `スキャン (${fmt(S.ceiling.h)})`);
+    const c = checks();
+    h += `<h3>測り忘れの確認（${c.length ? c.length + ' 件' : 'なし'}）</h3><ul class="chk">`;
+    h += c.length ? c.map((x, i) => `<li class="m" data-act="go" data-i="${i}">${esc(x.t)}</li>`).join('') : '<li class="g">全部入っています</li>';
+    h += '</ul>';
+    h += `<div class="key">数字の色：<b class="s">青（ ）</b>スキャンのまま／<b class="k">黒</b>実測／<b class="r">赤</b>足りない<br>入れたものは、この iPad の中に自動で残ります。<br>終わったら「書き出す」で、Google ドライブの部屋のフォルダに入れてください。</div>`;
+  }
+  side.innerHTML = h;
+  updWarn();
+}
+function updWarn() {
+  const el = $('#warn'); if (!el || !draft) return;
+  const r = runByKey(draft.runKey);
+  const d = num(draft.dist), w = num(draft.w), h = num(draft.h), s = num(draft.sill);
+  const msg = [];
+  if ([d, w, h, s].some(v => v != null && isNaN(v))) msg.push('数字だけを入れてください。');
+  if (d == null) msg.push('角からの距離が空です。'); if (w == null) msg.push('巾が空です。');
+  if (d != null && w != null && d + w > r.len + 30) msg.push(`面の長さ（${fmt(r.len)}）より長くなっています。角を確かめてください。`);
+  el.textContent = msg.join(' ');
+}
+
+// ---------- 変える（元に戻せるように） ----------
+// keep：入力欄の書き換えのときは、右の欄を作り直さない（次の欄をタップしたときに、キーボードが閉じないように）
+function change(fn, keep = false) {
+  hist.push(JSON.stringify(J)); if (hist.length > 100) hist.shift(); fn(); save();
+  if (keep) { buildRuns(); drawPlan(); $('#b_undo').disabled = false; } else refresh();
+}
+function refresh() { buildRuns(); drawPlan(); panel(); $('#b_undo').disabled = !hist.length; }
+function newId(kind) {
+  const base = kind === '窓' ? '窓' : '入口';
+  const used = new Set([...(J.add_openings || []).map(j => j.id), ...S.openings.map(o => o.id)]);
+  let i = 1; while (used.has(base + i)) i++;
+  return base + i;
+}
+
+side.addEventListener('click', e => {
+  const b = e.target.closest('[data-act]'); if (!b) return;
+  const act = b.dataset.act;
+  if (act === 'set') {
+    const f = b.dataset.f, v = b.dataset.v;
+    if (draft) { draft[f] = v; drawPlan(); panel(); return; }
+    if (sel && sel.t === 'op') {                       // スキャンのドアの種類・吊元・向き
+      const k = f.replace('op_', '');
+      change(() => { J.openings = J.openings || {}; const m = J.openings[sel.id] = J.openings[sel.id] || {}; m[k] = v; });
+    }
+    return;
+  }
+  if (act === 'adddoor' || act === 'addwin') {
+    const kind = act === 'addwin' ? '窓' : '開き戸';
+    draft = {mode: 'add', runKey: sel.key, id: newId(kind), kind, from: 'a', dist: '', w: '', h: '', sill: '', hinge: '', swing: '', label: ''};
+    refresh(); return;
+  }
+  if (act === 'ok') {
+    const o = draftToJ(draft);
+    if (!o) { toast('角からの距離と巾を入れてください'); return; }
+    const d = draft;
+    change(() => {
+      J.add_openings = J.add_openings || [];
+      if (d.mode === 'edit') J.add_openings[d.idx] = o; else J.add_openings.push(o);
+      draft = null; sel = null;
+    });
+    toast((o.label || o.id) + ' を入れました'); return;
+  }
+  if (act === 'cancel') { draft = null; refresh(); return; }
+  if (act === 'del') {
+    const d = draft, j = J.add_openings[d.idx];
+    if (!confirm(`${j.label || j.id} を消しますか？（「元に戻す」で戻せます）`)) return;
+    change(() => { J.add_openings.splice(d.idx, 1); if (!J.add_openings.length) delete J.add_openings; draft = null; sel = null; });
+    return;
+  }
+  if (act === 'close') { sel = null; refresh(); return; }
+  if (act === 'wo_ok') {
+    const id = runByKey(sel.key).ids[0];
+    const g = f => side.querySelector(`[data-f="${f}"]`).value;
+    const w = num(g('wo_w')), hd = num(g('wo_head'));
+    if (w == null || isNaN(w)) { toast('開口の巾を入れてください'); return; }
+    change(() => { J.wall_to_opening = J.wall_to_opening || {}; const o = {w}; if (hd != null && !isNaN(hd)) o.head = hd; const nt = g('wo_note').trim(); if (nt) o.note = nt; J.wall_to_opening[id] = o; });
+    return;
+  }
+  if (act === 'wo_del') {
+    const id = runByKey(sel.key).ids[0];
+    change(() => { delete J.wall_to_opening[id]; if (!Object.keys(J.wall_to_opening).length) delete J.wall_to_opening; });
+    return;
+  }
+  if (act === 'go') {
+    const c = checks()[+b.dataset.i]; if (!c || !c.go) return;
+    if (c.go.t === 'add') openAdded(c.go.i); else { sel = c.go; refresh(); }
+  }
+});
+side.addEventListener('input', e => {
+  const f = e.target.dataset.f; if (!f) return;
+  if (draft && !f.startsWith('op_') && !f.startsWith('wo_')) { draft[f] = e.target.value; drawPlan(); updWarn(); }
+});
+side.addEventListener('change', e => {           // スキャンの窓・ドアの実測、天井高は、入れ終わったら決まる
+  const f = e.target.dataset.f; if (!f) return;
+  const raw = e.target.value;
+  if (f === 'ch') {
+    const v = num(raw); if (v != null && isNaN(v)) { toast('数字だけを入れてください'); return; }
+    change(() => { if (v == null) delete J.ceiling; else J.ceiling = Object.assign({}, J.ceiling || {}, {h: v}); }, true);
+    return;
+  }
+  if (f.startsWith('op_') && sel && sel.t === 'op') {
+    const k = f.slice(3);
+    if (k === 'label') {
+      change(() => {
+        const t = raw.trim(); J.labels = J.labels || {};
+        if (t) J.labels[sel.id] = t; else delete J.labels[sel.id];
+        if (J.openings && J.openings[sel.id]) { if (t) J.openings[sel.id].label = t; else delete J.openings[sel.id].label; }
+      }, true);
+      return;
+    }
+    const v = num(raw); if (v != null && isNaN(v)) { toast('数字だけを入れてください'); return; }
+    const win = S.openings.find(x => x.id === sel.id).kind === 'window';
+    change(() => {
+      J.openings = J.openings || {};
+      const m = J.openings[sel.id] = J.openings[sel.id] || {};
+      if (v == null) delete m[k]; else m[k] = v;
+      if (win) m.basis = '内乗り';
+      if ((J.labels || {})[sel.id] && !m.label) m.label = J.labels[sel.id];
+      const keys = Object.keys(m).filter(x => x !== 'basis' && x !== 'label');
+      if (!keys.length) delete J.openings[sel.id];
+    }, true);
+  }
+});
+function openAdded(i) {
+  const j = J.add_openings[i], gm = addedGeom(j);
+  if (!gm) { toast('この入口の壁が見つかりません'); return; }
+  draft = {mode: 'edit', idx: i, runKey: gm.r.key, id: j.id, kind: j.kind === 'window' ? '窓' : (j.type || '開き戸'),
+    from: j.edge_from_a != null ? 'a' : 'b', dist: String(j.edge_from_a != null ? j.edge_from_a : j.edge_from_b),
+    w: String(j.w), h: j.h ? String(j.h) : '', sill: j.sill != null ? String(j.sill) : '', hinge: j.hinge || '', swing: j.swing || '',
+    label: j.label === j.id ? '' : (j.label || '')};
+  if (!j.walls) { draft.from = 'a'; draft.dist = String(Math.round(gm.s0)); }   // 前の形は、面の ① からに直す
+  sel = null; refresh();
+}
+
+// ---------- 図のタップ・ずらす・広げる ----------
+const ptrs = new Map(); let ges = null;
+const mmPerPx = () => vb.w / (svg.clientWidth || 1);
+function toMM(cx, cy) { const r = svg.getBoundingClientRect(); return [vb.x + (cx - r.left) * mmPerPx(), vb.y + (cy - r.top) * mmPerPx()]; }
+svg.addEventListener('pointerdown', e => {
+  if (!S) return;
+  svg.setPointerCapture(e.pointerId);
+  ptrs.set(e.pointerId, {x: e.clientX, y: e.clientY});
+  if (ptrs.size === 1) ges = {type: 'tap', vb: {...vb}, x0: e.clientX, y0: e.clientY};
+  else if (ptrs.size === 2) {
+    const [p, q] = [...ptrs.values()];
+    const c = [(p.x + q.x) / 2, (p.y + q.y) / 2];
+    ges = {type: 'pinch', vb: {...vb}, d0: Math.hypot(p.x - q.x, p.y - q.y) || 1, m0: toMM(c[0], c[1]), k: mmPerPx()};
+  }
+});
+svg.addEventListener('pointermove', e => {
+  if (!ptrs.has(e.pointerId) || !ges) return;
+  ptrs.set(e.pointerId, {x: e.clientX, y: e.clientY});
+  if (ges.type === 'tap' && Math.hypot(e.clientX - ges.x0, e.clientY - ges.y0) > 10) ges.type = 'pan';
+  if (ges.type === 'pan') {
+    const k = ges.vb.w / svg.clientWidth;
+    vb.x = ges.vb.x - (e.clientX - ges.x0) * k; vb.y = ges.vb.y - (e.clientY - ges.y0) * k; setVB();
+  } else if (ges.type === 'pinch' && ptrs.size === 2) {
+    const [p, q] = [...ptrs.values()];
+    const d = Math.hypot(p.x - q.x, p.y - q.y) || 1, s = Math.min(8, Math.max(0.1, ges.d0 / d));
+    vb.w = ges.vb.w * s; vb.h = ges.vb.h * s;
+    const r = svg.getBoundingClientRect(), c = [(p.x + q.x) / 2 - r.left, (p.y + q.y) / 2 - r.top], k = vb.w / svg.clientWidth;
+    vb.x = ges.m0[0] - c[0] * k; vb.y = ges.m0[1] - c[1] * k; setVB();
+  }
+});
+function endPtr(e) {
+  if (!ptrs.has(e.pointerId)) return;
+  if (ges && ges.type === 'tap' && ptrs.size === 1) onTap(toMM(e.clientX, e.clientY));
+  ptrs.delete(e.pointerId);
+  if (!ptrs.size) ges = null; else if (ges && ges.type === 'pinch') ges = null;
+}
+svg.addEventListener('pointerup', endPtr);
+svg.addEventListener('pointercancel', e => { ptrs.delete(e.pointerId); if (!ptrs.size) ges = null; });
+svg.addEventListener('wheel', e => {             // パソコンで試すとき用
+  if (!S) return; e.preventDefault();
+  const m = toMM(e.clientX, e.clientY), s = e.deltaY > 0 ? 1.15 : 1 / 1.15;
+  vb.x = m[0] - (m[0] - vb.x) * s; vb.y = m[1] - (m[1] - vb.y) * s; vb.w *= s; vb.h *= s; setVB();
+}, {passive: false});
+
+function onTap(m) {
+  if (draft) return;                              // 入力中は、図のタップで選び直さない
+  const tol = 28 * mmPerPx();
+  const near = (r, s0, s1) => { const v = sub(m, r.a), s = dot(v, r.u), d = -dot(v, r.n); return s > s0 - tol && s < s1 + tol && d > -tol && d < r.t + tol; };
+  for (const o of scanOps()) if (near(o.r, o.s0, o.s1)) { sel = {t: 'op', id: o.id}; refresh(); return; }
+  const adds = J.add_openings || [];
+  for (let i = 0; i < adds.length; i++) { const gm = addedGeom(adds[i]); if (gm && near(gm.r, gm.s0, gm.s1)) { openAdded(i); return; } }
+  let best = null, bd = 1e18;
+  for (const r of runs) {
+    const v = sub(m, r.a), s = dot(v, r.u), d = Math.abs(dot(v, r.n) + (r.inside ? 0 : r.t / 2));
+    if (s < -tol || s > r.len + tol) continue;
+    if (d < tol + (r.inside ? 0 : r.t / 2) && d < bd) { bd = d; best = r; }
+  }
+  sel = best ? {t: 'run', key: best.key} : null;
+  refresh();
+}
+
+// ---------- 開く・残す・書き出す ----------
+const KEY = () => `jissoku:${S.site}/${S.room}`;
+function save() {
+  try { localStorage.setItem(KEY(), JSON.stringify({S, J, ts: Date.now()})); $('#st').textContent = '自動で残しました ' + new Date().toTimeString().slice(0, 5); } catch (e) { $('#st').textContent = '自動で残せませんでした（書き出してください）'; }
+}
+function startRoom(scan, jis) {
+  S = scan;
+  J = jis || {kind: '部屋データ_実測', version: 1, site: S.site, room: S.room};
+  hist = []; sel = null; draft = null;
+  loop = outerLoop(S.walls); loopIds = new Set(loop.map(w => w.id));
+  $('#start').style.display = 'none';
+  $('#ttl').textContent = `${S.site} ／ ${S.room}`;
+  $('#b_exp').disabled = false;
+  if (!loop.length) toast('壁が輪になっていません（スキャンの抜け）。パソコンで線を描き足してください');
+  buildRuns(); fitView(); refresh(); save();
+}
+async function openFiles(files) {
+  const objs = [];
+  for (const f of files) { try { objs.push(JSON.parse(await f.text())); } catch (e) { toast(f.name + ' が読めませんでした'); } }
+  const sc = objs.find(o => o.kind === '部屋データ_スキャン'), js = objs.find(o => o.kind === '部屋データ_実測');
+  if (sc) {
+    let j = js || null;
+    if (!j) { try { const sv = JSON.parse(localStorage.getItem(`jissoku:${sc.site}/${sc.room}`) || 'null'); if (sv && confirm('この部屋の、前に入れた続きがあります。続きから入れますか？')) j = sv.J; } catch (e) {} }
+    if (j && (j.room !== sc.room)) { if (!confirm(`実測の部屋名（${j.room}）とスキャンの部屋名（${sc.room}）が違います。このまま開きますか？`)) return; }
+    startRoom(sc, j);
+  } else if (js) {
+    if (!S) { toast('先に、スキャンの JSON を開いてください（一緒に選んでも大丈夫です）'); return; }
+    if (js.room !== S.room && !confirm(`実測の部屋名（${js.room}）が、今の部屋（${S.room}）と違います。開きますか？`)) return;
+    change(() => { J = js; draft = null; sel = null; });
+  } else toast('部屋データの JSON ではありませんでした');
+}
+function ymd() { const d = new Date(); return String(d.getFullYear()).slice(2) + String(d.getMonth() + 1).padStart(2, '0') + String(d.getDate()).padStart(2, '0'); }
+function exportText() {
+  const out = JSON.parse(JSON.stringify(J));
+  out.kind = '部屋データ_実測'; out.version = 1; out.site = S.site; out.room = S.room;
+  const d = new Date(), p2 = v => String(v).padStart(2, '0');
+  out.tool = '実測入力画面 v1';
+  out.updated = `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}`;
+  return JSON.stringify(out, null, 1);
+}
+async function doExport() {
+  if (draft) { toast('入力中のものを「決める」か「やめる」にしてから書き出してください'); return; }
+  const name = `${ymd()}_${S.room}_実測.json`;
+  const blob = new Blob([exportText()], {type: 'application/json'});
+  const file = new File([blob], name, {type: 'application/json'});
+  if (navigator.canShare && navigator.canShare({files: [file]})) {
+    try { await navigator.share({files: [file], title: name}); } catch (e) {}
+    return;
+  }
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+function savedList() {
+  const box = $('#saved'); let h = '';
+  try {
+    const items = [];
+    for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k.startsWith('jissoku:')) { const v = JSON.parse(localStorage.getItem(k)); items.push([k, v]); } }
+    items.sort((a, b) => b[1].ts - a[1].ts);
+    if (items.length) h = '<p>前に入れた部屋（この iPad の中）</p>' + items.map(([k, v]) => `<button data-k="${esc(k)}">${esc(v.S.site)} ／ ${esc(v.S.room)}　<small>${new Date(v.ts).toLocaleString('ja-JP', {month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit'})}</small></button>`).join('');
+  } catch (e) {}
+  box.innerHTML = h;
+}
+$('#saved').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  try { const v = JSON.parse(localStorage.getItem(b.dataset.k)); startRoom(v.S, v.J); } catch (e) { toast('読めませんでした'); }
+});
+$('#b_open').onclick = $('#b_open2').onclick = () => $('#file').click();
+$('#file').onchange = e => { openFiles([...e.target.files]); e.target.value = ''; };
+$('#b_undo').onclick = () => { if (!hist.length) return; J = JSON.parse(hist.pop()); draft = null; sel = null; save(); refresh(); };
+$('#b_fit').onclick = () => { fitView(); drawPlan(); };
+$('#b_exp').onclick = doExport;
+window.addEventListener('resize', () => { if (S) { fitView(); drawPlan(); } });
+// 試す用（パソコンで、ファイルを選ばずに読ませる）
+window.__load = (scan, jis) => startRoom(scan, jis || null);
+window.__export = exportText;
+savedList(); panel();
+</script>
+</body>
+</html>
